@@ -5,15 +5,48 @@
 #include "../include/cpu.h"
 #include "assembler.h"
 
+// ─── label table ──────────────────────────────────────────────────
+#define MAX_LABELS 256
+
+typedef struct {
+    char     name[32];
+    uint32_t address;
+} Label;
+
+static Label  label_table[MAX_LABELS];
+static int    label_count = 0;
+
+static void label_table_clear(void) {
+    label_count = 0;
+}
+
+static void label_add(const char *name, uint32_t address) {
+    if (label_count >= MAX_LABELS) {
+        fprintf(stderr, "Too many labels\n");
+        return;
+    }
+    strncpy(label_table[label_count].name, name, 31);
+    label_table[label_count].name[31] = '\0';
+    label_table[label_count].address  = address;
+    label_count++;
+}
+
+// Returns the address of a label, or -1 if not found
+static int label_find(const char *name) {
+    for (int i = 0; i < label_count; i++) {
+        if (strcmp(label_table[i].name, name) == 0)
+            return (int)label_table[i].address;
+    }
+    return -1;
+}
+
 // ─── helpers ──────────────────────────────────────────────────────
 
-// Trim leading whitespace, return pointer into the string
 static char *trim(char *s) {
     while (isspace((unsigned char)*s)) s++;
     return s;
 }
 
-// Parse "R0"..."R15" and return the register number, or -1 on error
 static int parse_register(const char *s) {
     if (s[0] != 'R' && s[0] != 'r') return -1;
     int num = atoi(s + 1);
@@ -21,17 +54,21 @@ static int parse_register(const char *s) {
     return num;
 }
 
-// Parse a number: decimal (10), hex (0x1F), or register alias (SP, LR, PC)
-static int parse_immediate(const char *s) {
+// Parse immediate: decimal, hex, or label name
+static int parse_value(const char *s) {
     if (strncmp(s, "0x", 2) == 0 || strncmp(s, "0X", 2) == 0)
         return (int)strtol(s, NULL, 16);
     if (strcmp(s, "SP") == 0) return REG_SP;
     if (strcmp(s, "LR") == 0) return REG_LR;
     if (strcmp(s, "PC") == 0) return REG_PC;
-    return atoi(s);
+    // if it starts with a digit it's a number
+    if (isdigit((unsigned char)s[0])) return atoi(s);
+    // otherwise treat as a label — look it up
+    int addr = label_find(s);
+    if (addr < 0) fprintf(stderr, "Undefined label: '%s'\n", s);
+    return addr;
 }
 
-// Write a 32-bit instruction into memory little-endian
 static void emit(Machine *m, uint32_t *addr, uint32_t instr) {
     m->memory[*addr + 0] = (instr)       & 0xFF;
     m->memory[*addr + 1] = (instr >>  8) & 0xFF;
@@ -40,54 +77,93 @@ static void emit(Machine *m, uint32_t *addr, uint32_t instr) {
     *addr += 4;
 }
 
-// ─── assemble one line ────────────────────────────────────────────
-// Returns 1 on success, 0 on empty/comment, -1 on error
-static int assemble_line(Machine *m, uint32_t *addr,
-                          char *line, int line_num) {
-    line = trim(line);
+// ─── check if a line is a label definition ────────────────────────
+// Returns the label name (without colon) if it is, NULL if not
+static char *get_label(char *line) {
+    char *trimmed = trim(line);
+    char *colon   = strchr(trimmed, ':');
+    if (!colon) return NULL;
 
-    // skip blank lines and comments
-    if (*line == '\0' || *line == ';' || *line == '#') return 0;
+    // make sure nothing comes before the colon except identifier chars
+    for (char *p = trimmed; p < colon; p++) {
+        if (!isalnum((unsigned char)*p) && *p != '_') return NULL;
+    }
+
+    *colon = '\0';   // cut off the colon
+    return trimmed;  // return just the name
+}
+
+// ─── count how many instructions a line produces ──────────────────
+// Labels and blank lines produce 0. Every instruction produces 1 (= 4 bytes).
+static int instruction_size(char *line) {
+    char copy[256];
+    strncpy(copy, line, 255);
+    copy[255] = '\0';
+
+    char *trimmed = trim(copy);
+    if (*trimmed == '\0' || *trimmed == ';' || *trimmed == '#') return 0;
 
     // remove inline comments
-    char *comment = strchr(line, ';');
-    if (comment) *comment = '\0';
-    comment = strchr(line, '#');
-    if (comment) *comment = '\0';
+    char *c = strchr(trimmed, ';'); if (c) *c = '\0';
+    c = strchr(trimmed, '#'); if (c) *c = '\0';
 
-    // tokenize: split on spaces and commas
+    // if it ends with a colon it's a label
+    if (get_label(trimmed)) return 0;
+
+    // everything else is one instruction = 4 bytes
+    return 4;
+}
+
+// ─── assemble one line (pass 2) ───────────────────────────────────
+static int assemble_line(Machine *m, uint32_t *addr,
+                          char *line, int line_num) {
+    char copy[256];
+    strncpy(copy, line, 255);
+    copy[255] = '\0';
+
+    char *trimmed = trim(copy);
+    if (*trimmed == '\0' || *trimmed == ';' || *trimmed == '#') return 0;
+
+    // remove inline comments
+    char *comment = strchr(trimmed, ';'); if (comment) *comment = '\0';
+    comment = strchr(trimmed, '#'); if (comment) *comment = '\0';
+
+    // skip label definitions — already handled in pass 1
+    {
+        char labelcopy[256];
+        strncpy(labelcopy, trimmed, 255);
+        if (get_label(labelcopy)) return 0;
+    }
+
+    // tokenize
     char *tokens[8];
     int   count = 0;
-    char *copy  = strdup(line);
-    char *tok   = strtok(copy, " ,\t\n\r");
+    char *work  = strdup(trimmed);
+    char *tok   = strtok(work, " ,\t\n\r");
     while (tok && count < 8) {
         tokens[count++] = tok;
         tok = strtok(NULL, " ,\t\n\r");
     }
+    if (count == 0) { free(work); return 0; }
 
-    if (count == 0) { free(copy); return 0; }
-
-    // uppercase the mnemonic for case-insensitive matching
+    // uppercase mnemonic
     char mnemonic[16];
     strncpy(mnemonic, tokens[0], 15);
     mnemonic[15] = '\0';
     for (int i = 0; mnemonic[i]; i++)
         mnemonic[i] = toupper((unsigned char)mnemonic[i]);
 
-    // ── instruction encoding ──────────────────────────────────────
     uint32_t instr = 0;
     int rd, ra, rb, imm;
 
-    // TYPE R — three register instructions
-    if (strcmp(mnemonic, "ADD") == 0 || strcmp(mnemonic, "SUB") == 0 ||
-        strcmp(mnemonic, "MUL") == 0 || strcmp(mnemonic, "DIV") == 0 ||
-        strcmp(mnemonic, "AND") == 0 || strcmp(mnemonic, "OR")  == 0 ||
-        strcmp(mnemonic, "XOR") == 0) {
-        if (count < 4) { fprintf(stderr, "Line %d: %s needs 3 registers\n", line_num, mnemonic); free(copy); return -1; }
+    // TYPE R
+    if (strcmp(mnemonic,"ADD")==0 || strcmp(mnemonic,"SUB")==0 ||
+        strcmp(mnemonic,"MUL")==0 || strcmp(mnemonic,"DIV")==0 ||
+        strcmp(mnemonic,"AND")==0 || strcmp(mnemonic,"OR") ==0 ||
+        strcmp(mnemonic,"XOR")==0) {
         rd = parse_register(tokens[1]);
         ra = parse_register(tokens[2]);
         rb = parse_register(tokens[3]);
-        if (rd < 0 || ra < 0 || rb < 0) { fprintf(stderr, "Line %d: bad register\n", line_num); free(copy); return -1; }
         uint8_t op = strcmp(mnemonic,"ADD")==0 ? OP_ADD :
                      strcmp(mnemonic,"SUB")==0 ? OP_SUB :
                      strcmp(mnemonic,"MUL")==0 ? OP_MUL :
@@ -98,115 +174,124 @@ static int assemble_line(Machine *m, uint32_t *addr,
         instr = ENCODE_R(op, rd, ra, rb);
         emit(m, addr, instr);
     }
-
-    // NOT — two register
-    else if (strcmp(mnemonic, "NOT") == 0) {
-        if (count < 3) { fprintf(stderr, "Line %d: NOT needs 2 registers\n", line_num); free(copy); return -1; }
+    else if (strcmp(mnemonic,"NOT")==0) {
         rd = parse_register(tokens[1]);
         ra = parse_register(tokens[2]);
         instr = ENCODE_R(OP_NOT, rd, ra, 0);
         emit(m, addr, instr);
     }
-
-    // TYPE I — register + immediate
-    else if (strcmp(mnemonic, "ADDI") == 0) {
-        if (count < 4) { fprintf(stderr, "Line %d: ADDI needs Rd, Ra, imm\n", line_num); free(copy); return -1; }
+    // TYPE I
+    else if (strcmp(mnemonic,"ADDI")==0) {
         rd  = parse_register(tokens[1]);
         ra  = parse_register(tokens[2]);
-        imm = parse_immediate(tokens[3]);
+        imm = parse_value(tokens[3]);
         instr = ENCODE_I(OP_ADDI, rd, ra, imm);
         emit(m, addr, instr);
     }
-
-    else if (strcmp(mnemonic, "LOAD") == 0) {
-        if (count < 4) { fprintf(stderr, "Line %d: LOAD needs Rd, Ra, imm\n", line_num); free(copy); return -1; }
+    else if (strcmp(mnemonic,"LOAD")==0) {
         rd  = parse_register(tokens[1]);
         ra  = parse_register(tokens[2]);
-        imm = parse_immediate(tokens[3]);
+        imm = parse_value(tokens[3]);
         instr = ENCODE_I(OP_LOAD, rd, ra, imm);
         emit(m, addr, instr);
     }
-
-    else if (strcmp(mnemonic, "STORE") == 0) {
-        if (count < 4) { fprintf(stderr, "Line %d: STORE needs Rd, Ra, imm\n", line_num); free(copy); return -1; }
+    else if (strcmp(mnemonic,"STORE")==0) {
         rd  = parse_register(tokens[1]);
         ra  = parse_register(tokens[2]);
-        imm = parse_immediate(tokens[3]);
+        imm = parse_value(tokens[3]);
         instr = ENCODE_I(OP_STORE, rd, ra, imm);
         emit(m, addr, instr);
     }
-
-    // BRANCHES — Rd is unused, Ra is base, imm is offset
-    else if (strcmp(mnemonic, "BEQ") == 0 || strcmp(mnemonic, "BNE") == 0 ||
-             strcmp(mnemonic, "BLT") == 0 || strcmp(mnemonic, "BGT") == 0) {
-        if (count < 3) { fprintf(stderr, "Line %d: branch needs Ra, imm\n", line_num); free(copy); return -1; }
+    // BRANCHES — now accept label names
+    else if (strcmp(mnemonic,"BEQ")==0 || strcmp(mnemonic,"BNE")==0 ||
+             strcmp(mnemonic,"BLT")==0 || strcmp(mnemonic,"BGT")==0) {
         ra  = parse_register(tokens[1]);
-        imm = parse_immediate(tokens[2]);
+        imm = parse_value(tokens[2]);
         uint8_t op = strcmp(mnemonic,"BEQ")==0 ? OP_BEQ :
                      strcmp(mnemonic,"BNE")==0 ? OP_BNE :
                      strcmp(mnemonic,"BLT")==0 ? OP_BLT : OP_BGT;
         instr = ENCODE_I(op, 0, ra, imm);
         emit(m, addr, instr);
     }
-
-    // TYPE J — jump and call
-    else if (strcmp(mnemonic, "JMP") == 0) {
-        if (count < 2) { fprintf(stderr, "Line %d: JMP needs address\n", line_num); free(copy); return -1; }
-        imm = parse_immediate(tokens[1]);
+    // TYPE J — now accept label names
+    else if (strcmp(mnemonic,"JMP")==0) {
+        imm = parse_value(tokens[1]);
         instr = ENCODE_J(OP_JMP, imm);
         emit(m, addr, instr);
     }
-
-    else if (strcmp(mnemonic, "CALL") == 0) {
-        if (count < 2) { fprintf(stderr, "Line %d: CALL needs address\n", line_num); free(copy); return -1; }
-        imm = parse_immediate(tokens[1]);
+    else if (strcmp(mnemonic,"CALL")==0) {
+        imm = parse_value(tokens[1]);
         instr = ENCODE_J(OP_CALL, imm);
         emit(m, addr, instr);
     }
-
-    // NO-OPERAND instructions
-    else if (strcmp(mnemonic, "RET")  == 0) { emit(m, addr, ENCODE_R(OP_RET,  0,0,0)); }
-    else if (strcmp(mnemonic, "HALT") == 0) { emit(m, addr, ENCODE_R(OP_HALT, 0,0,0)); }
-    else if (strcmp(mnemonic, "PUSH") == 0) {
-        if (count < 2) { fprintf(stderr, "Line %d: PUSH needs a register\n", line_num); free(copy); return -1; }
+    // NO-OPERAND
+    else if (strcmp(mnemonic,"RET") ==0) { emit(m, addr, ENCODE_R(OP_RET,  0,0,0)); }
+    else if (strcmp(mnemonic,"HALT")==0) { emit(m, addr, ENCODE_R(OP_HALT, 0,0,0)); }
+    else if (strcmp(mnemonic,"PUSH")==0) {
         ra = parse_register(tokens[1]);
         instr = ENCODE_R(OP_PUSH, 0, ra, 0);
         emit(m, addr, instr);
     }
-    else if (strcmp(mnemonic, "POP") == 0) {
-        if (count < 2) { fprintf(stderr, "Line %d: POP needs a register\n", line_num); free(copy); return -1; }
+    else if (strcmp(mnemonic,"POP")==0) {
         rd = parse_register(tokens[1]);
         instr = ENCODE_R(OP_POP, rd, 0, 0);
         emit(m, addr, instr);
     }
-
     else {
         fprintf(stderr, "Line %d: unknown mnemonic '%s'\n", line_num, mnemonic);
-        free(copy);
+        free(work);
         return -1;
     }
 
-    free(copy);
+    free(work);
     return 1;
+}
+
+// ─── two-pass assembly from an array of lines ─────────────────────
+static int assemble_lines(Machine *m, char **lines, int line_count) {
+    label_table_clear();
+
+    // ── PASS 1: collect labels ────────────────────────────────────
+    uint32_t addr = 0;
+    for (int i = 0; i < line_count; i++) {
+        char copy[256];
+        strncpy(copy, lines[i], 255);
+
+        char *label = get_label(trim(copy));
+        if (label) {
+            label_add(label, addr);  // record label at current address
+        } else {
+            addr += instruction_size(lines[i]);  // advance address
+        }
+    }
+
+    // ── PASS 2: encode instructions ───────────────────────────────
+    addr = 0;
+    int count = 0;
+    for (int i = 0; i < line_count; i++) {
+        int result = assemble_line(m, &addr, lines[i], i + 1);
+        if (result == -1) return -1;
+        if (result ==  1) count++;
+    }
+
+    return count;
 }
 
 // ─── public API ───────────────────────────────────────────────────
 
 int assemble_string(Machine *m, const char *source) {
-    char *copy = strdup(source);
-    uint32_t addr = 0;
-    int line_num  = 1;
-    int count     = 0;
-
-    char *line = strtok(copy, "\n");
-    while (line) {
-        int result = assemble_line(m, &addr, line, line_num++);
-        if (result == -1) { free(copy); return -1; }
-        if (result == 1)  count++;
+    // split source into lines
+    char  *copy   = strdup(source);
+    char  *lines_buf[1024];
+    int    count  = 0;
+    char  *line   = strtok(copy, "\n");
+    while (line && count < 1024) {
+        lines_buf[count++] = line;
         line = strtok(NULL, "\n");
     }
+    int result = assemble_lines(m, lines_buf, count);
     free(copy);
-    return count;
+    return result;
 }
 
 int assemble_file(Machine *m, const char *filename) {
@@ -216,17 +301,17 @@ int assemble_file(Machine *m, const char *filename) {
         return -1;
     }
 
-    uint32_t addr    = 0;
-    int      line_num = 1;
-    int      count    = 0;
-    char     line[256];
-
-    while (fgets(line, sizeof(line), f)) {
-        int result = assemble_line(m, &addr, line, line_num++);
-        if (result == -1) { fclose(f); return -1; }
-        if (result == 1)  count++;
+    // read all lines into memory first
+    char  *lines_buf[1024];
+    int    count = 0;
+    char   buf[256];
+    while (fgets(buf, sizeof(buf), f) && count < 1024) {
+        lines_buf[count++] = strdup(buf);
     }
-
     fclose(f);
-    return count;
+
+    int result = assemble_lines(m, lines_buf, count);
+
+    for (int i = 0; i < count; i++) free(lines_buf[i]);
+    return result;
 }
