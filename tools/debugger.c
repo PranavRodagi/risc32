@@ -86,6 +86,12 @@ void disassemble(Machine *m, uint32_t addr) {
         case OP_BGT:  printf("BGT  R%d, 0x%04X",    ra, imm);     break;
         case OP_PUSH: printf("PUSH R%d",             ra);          break;
         case OP_POP:  printf("POP  R%d",             rd);          break;
+        case OP_HASH:         printf("HASH R%d, R%d, %d",    rd, ra, imm); break;
+        case OP_ENCRYPT:      printf("ENCRYPT R%d, %d",       ra, imm);     break;
+        case OP_DECRYPT:      printf("DECRYPT R%d, %d",       ra, imm);     break;
+        case OP_VERIFY:       printf("VERIFY R%d, R%d, %d",  ra, rb, imm); break;
+        case OP_SECURE_ERASE: printf("SERASE R%d, %d",        ra, imm);     break;
+        case OP_RANDOM:       printf("RANDOM R%d",            rd);           break;
         default:      printf("??? (unknown opcode 0x%02X)", opcode); break;
     }
     printf("\n");

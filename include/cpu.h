@@ -42,8 +42,24 @@
 #define OP_PUSH  0x20
 #define OP_POP   0x21
 
+// ─── security opcodes ─────────────────────────────────────────────
+#define OP_HASH         0x30   // R1 = hash(memory[R0 .. R0+imm])
+#define OP_ENCRYPT      0x31   // encrypt memory[R0 .. R0+imm] using R12
+#define OP_DECRYPT      0x32   // decrypt memory[R0 .. R0+imm] using R12
+#define OP_VERIFY       0x33   // constant-time compare mem[R0..+imm] vs mem[R1..+imm]
+#define OP_SECURE_ERASE 0x34   // guaranteed zero memory[R0 .. R0+imm]
+#define OP_RANDOM       0x35   // Rd = random 32-bit value               
+
+// security instructions use TYPE I format
+// HASH    Rd, Ra, len   → Rd = hash(memory[Ra .. Ra+len])
+// ENCRYPT Ra, len       → encrypt memory[Ra .. Ra+len] with R12
+// DECRYPT Ra, len       → decrypt memory[Ra .. Ra+len] with R12
+// VERIFY  Ra, Rb, len   → constant-time compare, result in flags
+// SECURE_ERASE Ra, len  → zero memory[Ra .. Ra+len]
+// RANDOM  Rd            → Rd = random value
+
 // ─── helper: encode instructions into memory ──────────────────────
-// You'll use these in main.c to write test programs directly
+//use these in main.c to write test programs directly
 #define ENCODE_R(op, rd, ra, rb) \
     ((uint32_t)(op) << 24 | (uint32_t)(rd) << 20 | \
      (uint32_t)(ra) << 16 | (uint32_t)(rb) << 12)

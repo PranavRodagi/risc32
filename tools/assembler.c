@@ -224,6 +224,46 @@ static int assemble_line(Machine *m, uint32_t *addr,
         instr = ENCODE_J(OP_CALL, imm);
         emit(m, addr, instr);
     }
+    else if (strcmp(mnemonic,"HASH")==0) {
+        rd  = parse_register(tokens[1]);
+        ra  = parse_register(tokens[2]);
+        imm = parse_value(tokens[3]);
+        instr = ENCODE_I(OP_HASH, rd, ra, imm);
+        emit(m, addr, instr);
+    }
+    else if (strcmp(mnemonic,"ENCRYPT")==0) {
+        ra  = parse_register(tokens[1]);
+        imm = parse_value(tokens[2]);
+        instr = ENCODE_I(OP_ENCRYPT, 0, ra, imm);
+        emit(m, addr, instr);
+    }
+    else if (strcmp(mnemonic,"DECRYPT")==0) {
+        ra  = parse_register(tokens[1]);
+        imm = parse_value(tokens[2]);
+        instr = ENCODE_I(OP_DECRYPT, 0, ra, imm);
+        emit(m, addr, instr);
+    }
+    else if (strcmp(mnemonic,"VERIFY")==0) {
+        ra  = parse_register(tokens[1]);
+        rb  = parse_register(tokens[2]);
+        imm = parse_value(tokens[3]);
+        instr = ENCODE_I(OP_VERIFY, 0, ra, imm);
+        // pack rb into bits 12-15
+        instr |= ((uint32_t)rb << 12);
+        emit(m, addr, instr);
+    }
+    else if (strcmp(mnemonic,"SERASE")==0) {
+        ra  = parse_register(tokens[1]);
+        imm = parse_value(tokens[2]);
+        instr = ENCODE_I(OP_SECURE_ERASE, 0, ra, imm);
+        emit(m, addr, instr);
+    }
+    else if (strcmp(mnemonic,"RANDOM")==0) {
+        rd = parse_register(tokens[1]);
+        instr = ENCODE_R(OP_RANDOM, rd, 0, 0);
+        emit(m, addr, instr);
+    }
+    
     // NO-OPERAND
     else if (strcmp(mnemonic,"RET") ==0) { emit(m, addr, ENCODE_R(OP_RET,  0,0,0)); }
     else if (strcmp(mnemonic,"HALT")==0) { emit(m, addr, ENCODE_R(OP_HALT, 0,0,0)); }
