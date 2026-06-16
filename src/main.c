@@ -15,7 +15,7 @@ int main(int argc, char *argv[]) {
     machine_init(&m);
 
     // automatically enable secure mode for security programs
-    if (strstr(argv[1], "security")) {
+    if (strstr(argv[1], "security") || strstr(argv[1], "encrypt")) {
         m.cpu.privilege_mode = MODE_SECURE;
         printf("Running in SECURE mode\n");
     }
