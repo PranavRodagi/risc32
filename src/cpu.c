@@ -31,6 +31,63 @@ static void trace_write(const char *fmt, ...) {
     vfprintf(trace_file, fmt, args);
     va_end(args);
 }
+
+// ─── MPU ──────────────────────────────────────────────────────────
+static void mpu_fault(const char *type, uint32_t addr,
+                      uint8_t mode) {
+    printf("[MPU FAULT] %s at 0x%04X in %s mode\n",
+        type, addr, mode == MODE_SECURE ? "SECURE" : "USER");
+}
+
+// Returns 1 if access is permitted, 0 if faulted
+static int mpu_check(Machine *m, uint32_t addr,
+                     uint8_t permission, const char *type) {
+    if (!m->mpu_enabled) return 1;   // MPU off — everything allowed
+
+    for (int i = 0; i < MPU_MAX_REGIONS; i++) {
+        MPU_Region *r = &m->mpu[i];
+        if (!r->enabled) continue;
+        if (addr < r->base || addr > r->limit) continue;
+
+        // address is in this region — check mode permission
+        uint8_t mode_bit = (m->cpu.privilege_mode == MODE_SECURE)
+                           ? MPU_SECURE : MPU_USER;
+        if (!(r->allowed_modes & mode_bit)) {
+            mpu_fault(type, addr, m->cpu.privilege_mode);
+            m->cpu.halted = 1;
+            return 0;
+        }
+
+        // check access permission
+        if (!(r->permissions & permission)) {
+            mpu_fault(type, addr, m->cpu.privilege_mode);
+            m->cpu.halted = 1;
+            return 0;
+        }
+
+        return 1;   // permitted
+    }
+
+    // address not covered by any region — default deny
+    printf("[MPU FAULT] %s at 0x%04X — no region covers this address\n",
+        type, addr);
+    m->cpu.halted = 1;
+    return 0;
+}
+
+void mpu_add_region(Machine *m, int index, uint32_t base,
+                    uint32_t limit, uint8_t perms, uint8_t modes) {
+    if (index < 0 || index >= MPU_MAX_REGIONS) return;
+    m->mpu[index].base          = base;
+    m->mpu[index].limit         = limit;
+    m->mpu[index].permissions   = perms;
+    m->mpu[index].allowed_modes = modes;
+    m->mpu[index].enabled       = 1;
+}
+
+void mpu_enable(Machine *m, int on) {
+    m->mpu_enabled = on;
+}
  
 static uint32_t fnv1a_hash(uint8_t *data, uint32_t length) {
     uint32_t hash = 2166136261u;
@@ -136,12 +193,15 @@ void machine_step(Machine *m) {
     for (int i = 0; i < NUM_REGISTERS; i++)
         reg_before[i] = m->cpu.registers[i];
     uint8_t flags_before = m->cpu.flags;
- 
+
     // FETCH
     uint32_t pc          = m->cpu.registers[REG_PC];
+
+    // MPU: check execute permission before fetch
+    if (!mpu_check(m, pc, MPU_EXECUTE, "EXECUTE")) return;
+
     uint32_t instruction = read_word(m->memory, pc);
     m->cpu.registers[REG_PC] += 4;
- 
     // DECODE
     uint8_t  opcode = (instruction >> 24) & 0xFF;
     uint8_t  rd     = (instruction >> 20) & 0xF;
@@ -203,11 +263,15 @@ void machine_step(Machine *m) {
             m->cpu.cycle_count += 1;
             break;
         case OP_LOAD:
-            reg[rd] = read_word(mem, reg[ra] + imm);
+            uint32_t load_addr = reg[ra] + imm;
+            if (!mpu_check(m, load_addr, MPU_READ, "READ")) return;
+            reg[rd] = read_word(mem, load_addr);
             m->cpu.cycle_count += 2;
             break;
         case OP_STORE:
-            write_word(mem, reg[ra] + imm, reg[rd]);
+            uint32_t store_addr = reg[ra] + imm;
+            if (!mpu_check(m, store_addr, MPU_WRITE, "WRITE")) return;
+            write_word(mem, store_addr, reg[rd]);
             m->cpu.cycle_count += 2;
             break;
         case OP_JMP:

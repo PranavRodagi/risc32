@@ -63,6 +63,24 @@
 #define ENCODE_J(op, addr) \
     ((uint32_t)(op) << 24 | ((uint32_t)(addr) & 0xFFFFFF))
 
+
+// ─── MPU ──────────────────────────────────────────────────────────
+#define MPU_MAX_REGIONS  8
+
+#define MPU_READ         0x01
+#define MPU_WRITE        0x02
+#define MPU_EXECUTE      0x04
+#define MPU_USER         0x01
+#define MPU_SECURE       0x02
+
+typedef struct {
+    uint32_t base;
+    uint32_t limit;
+    uint8_t  permissions;   // MPU_READ | MPU_WRITE | MPU_EXECUTE
+    uint8_t  allowed_modes; // MPU_USER | MPU_SECURE
+    uint8_t  enabled;
+} MPU_Region;
+
 // ─── structs ──────────────────────────────────────────────────────
 typedef struct {
     uint32_t registers[NUM_REGISTERS];
@@ -73,8 +91,10 @@ typedef struct {
 } CPU;
 
 typedef struct {
-    CPU     cpu;
-    uint8_t memory[MEMORY_SIZE];
+    CPU        cpu;
+    uint8_t    memory[MEMORY_SIZE];
+    MPU_Region mpu[MPU_MAX_REGIONS];
+    uint8_t    mpu_enabled;
 } Machine;
 
 // ─── function declarations ────────────────────────────────────────
@@ -82,6 +102,10 @@ void machine_init(Machine *m);
 void machine_step(Machine *m);
 void machine_run(Machine *m);
 void machine_dump(Machine *m);
+
+void mpu_add_region(Machine *m, int index, uint32_t base,
+                    uint32_t limit, uint8_t perms, uint8_t modes);
+void mpu_enable(Machine *m, int on);
 
 void tracer_open(void);
 void tracer_close(void);
