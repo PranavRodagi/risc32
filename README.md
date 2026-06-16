@@ -159,6 +159,6 @@ Design decisions documented in commit history.
 - [x] Interactive debugger with breakpoints
 - [x] Security instruction set (HASH, ENCRYPT, DECRYPT)
 - [x] Execution tracer and WCET analyzer
-- [ ] Memory protection unit
+- [x] Memory protection unit
 - [ ] Virtual peripherals (UART, SPI)
 - [ ] RTOS-inspired scheduler
