@@ -1,17 +1,32 @@
-#include <stdio.h> //uses the input/output library
-#include <stdint.h> //allows for setting integer type widths
+#include <stdio.h>
+#include "../include/cpu.h"
+#include "../tools/assembler.h"
+#include "../tools/debugger.h"
 
-int main() {
-    uint32_t instruction = 0x12345678;
-    uint8_t opcode = (instruction >> 24) & 0xFF;
-    uint8_t rd = (instruction >> 20) & 0xF;
-    uint8_t ra = (instruction >> 16) & 0xF;
-    uint16_t imm = instruction & 0xFFFF;
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <program.asm>\n", argv[0]);
+        fprintf(stderr, "Example: %s tests/count.asm\n", argv[0]);
+        return 1;
+    }
 
-    printf("instruction: 0x%08X\n", instruction); 
-    printf("opcode:      0x%02X\n", opcode); 
-    printf("ra:          %d\n", ra);
-    printf("imm:         0x%04X\n", imm);
+    Machine m;
+    machine_init(&m);
 
+    // security.asm needs secure mode
+    if (argc >= 2) {
+        const char *filename = argv[1];
+        // check if filename contains "security"
+        if (strstr(filename, "security")) {
+            m.cpu.privilege_mode = MODE_SECURE;
+            printf("Running in SECURE mode\n");
+        }
+    }
+
+    int instructions = assemble_file(&m, argv[1]);
+    if (instructions < 0) return 1;
+    printf("Assembled %d instructions from %s\n\n", instructions, argv[1]);
+
+    debugger_start(&m);
     return 0;
 }
