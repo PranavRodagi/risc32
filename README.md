@@ -157,8 +157,8 @@ Design decisions documented in commit history.
 - [x] Deterministic cycle counting
 - [x] Two-pass assembler with labels
 - [x] Interactive debugger with breakpoints
-- [ ] Security instruction set (HASH, ENCRYPT, DECRYPT)
-- [ ] Execution tracer and WCET analyzer
+- [x] Security instruction set (HASH, ENCRYPT, DECRYPT)
+- [x] Execution tracer and WCET analyzer
 - [ ] Memory protection unit
 - [ ] Virtual peripherals (UART, SPI)
 - [ ] RTOS-inspired scheduler
